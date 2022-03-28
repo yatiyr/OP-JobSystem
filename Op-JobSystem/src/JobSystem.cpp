@@ -11,7 +11,7 @@ namespace OP
 	{
 		uint32_t numThreads = 0;
 
-		ThreadSafeQueue<std::function<void()>, 512> jobPool;
+		ThreadSafeQueue<std::pair<std::function<void()>, uint32_t*>, 512> jobPool;
 
 		std::condition_variable wakeCondition;
 		std::mutex wakeMutex;
@@ -22,6 +22,13 @@ namespace OP
 	
 
 	static JobSystemData s_JobSystemData;
+
+	inline void JobSystem::Poll()
+	{
+		// Wake one of the threads up
+		s_JobSystemData.wakeCondition.notify_one();
+		std::this_thread::yield();
+	}
 
 
 	void JobSystem::Initialize()
@@ -41,12 +48,17 @@ namespace OP
 		{
 			std::thread worker([] {
 				std::function<void()> job; // current job
+				uint32_t* isFinished;
+
+				std::pair<std::function<void()>, uint32_t*> pair = { job, isFinished };
+
 
 				while (true)
 				{
-					if (s_JobSystemData.jobPool.Pop(job))
+					if (s_JobSystemData.jobPool.Pop(pair))
 					{
-						job(); // execute found job
+						pair.first(); // execute found job
+						*(pair.second) -= 1;
 						s_JobSystemData.finishedLabel.fetch_add(1); // update worker label state
 					}
 					else
@@ -62,5 +74,70 @@ namespace OP
 		}
 	}
 
+	void JobSystem::Execute(const std::function<void()>& job, JobTracker& tracker)
+	{
+
+		// Update main thread label state
+		s_JobSystemData.currentLabel += 1;
+
+		std::pair<std::function<void()>, uint32_t*> pair = { job, &tracker.isFinished };
+
+		// Try to push a new job
+		while (!s_JobSystemData.jobPool.Push(pair))
+			Poll();
+
+		s_JobSystemData.wakeCondition.notify_one();
+
+	}
+
+
+	bool JobSystem::IsBusy()
+	{
+		return s_JobSystemData.finishedLabel.load() < s_JobSystemData.currentLabel;
+	}
+
+	void JobSystem::Wait()
+	{
+		while (IsBusy()) { Poll(); }
+	}
+
+
+	/*void JobSystem::Dispatch(uint32_t jobCount, uint32_t groupSize, const std::function<void(JobDispatchArgs)>& job)
+	{
+		if (jobCount == 0 || groupSize == 0)
+		{
+			return;
+		}
+
+		const uint32_t groupCount = (jobCount + groupSize - 1) / groupSize;
+
+		s_JobSystemData.currentLabel += groupCount;
+
+		for (uint32_t groupIndex = 0; groupIndex < groupCount; groupIndex++)
+		{
+			auto& jobGroup = [jobCount, groupSize, job, groupIndex]()
+			{
+				// Calculate the current group's offset into the jobs:
+				const uint32_t groupJobOffset = groupIndex * groupSize;
+				const uint32_t groupJobEnd = std::min(groupJobOffset + groupSize, jobCount);
+
+				JobDispatchArgs args;
+				args.groupIndex = groupIndex;
+
+				// Inside the group, loop through all job indices and execute job
+				for (uint32_t i = groupJobOffset; i < groupJobEnd; i++)
+				{
+					args.jobIndex = i;
+					job(args);
+				}
+			};
+
+			// Try to push a new job until it is pushed successfully
+			while (!s_JobSystemData.jobPool.Push(jobGroup)) { Poll(); }
+
+			s_JobSystemData.wakeCondition.notify_one();
+		}
+
+	} */
 
 }

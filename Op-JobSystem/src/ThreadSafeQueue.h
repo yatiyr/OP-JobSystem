@@ -9,14 +9,14 @@ namespace OP
 	class ThreadSafeQueue
 	{
 	public:
-		inline bool Push(const T& element)
+		inline bool Push(T& element)
 		{
 			bool result = false;
 			m_Lock.lock();
 			uint32_t next = (m_Head + 1) % Cap;
 			if (next != m_Tail)
 			{
-				m_Data[m_Head] = item;
+				m_Data[m_Head] = element;
 				m_Head = next;
 				result = true;
 			}
@@ -24,13 +24,13 @@ namespace OP
 			return result;
 		}
 
-		inline bool Pop(T& item)
+		inline bool Pop(T& element)
 		{
 			bool result = false;
 			m_Lock.lock();
 			if (m_Tail != m_Head)
 			{
-				item = data[m_Tail];
+				element = m_Data[m_Tail];
 				m_Tail = (m_Tail + 1) % Cap;
 				result = true;
 			}
